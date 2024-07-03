@@ -194,7 +194,7 @@ for(i in 1:nrow(ldBlocks)){
 }
 unlink(temp_dir, recursive = TRUE)
 
-MR = unique( c(unlist(strsplit(opt$MR_methods,',')),"top1") )
+MR = unique( c(unlist(strsplit(opt$MR_methods,','))) )
 M = length(MR)
 
 res_MR = NULL
