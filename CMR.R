@@ -12,8 +12,8 @@ option_list = list(
               help="Path to outcome GWAS summary statistics (COJO format + chr + pos) [required]"),
   make_option("--bfile", action="store", default=NA, type='character',
               help="Path to PLINK binary input file prefix (minus bed/bim/fam) for LD reference panel splitted into 22 chromosomes [required]"),
-  make_option("--pfile", action="store", default=NA, type='character',
-              help="Path to PLINK2 pgen input file prefix (minus pgen/psam/pvar)for LD reference panel splitted into 22 chromosomes [required if --bfile is not provided]"),
+#   make_option("--pfile", action="store", default=NA, type='character',
+#               help="Path to PLINK2 pgen input file prefix (minus pgen/psam/pvar)for LD reference panel splitted into 22 chromosomes [required if --bfile is not provided] TODO"),
   make_option("--LDref_SNP", action="store", default=NA, type='character',
               help="Path to a text file containing all SNPs present in the LD reference panel [required]"),
   make_option("--out", action="store", default=NA, type='character',
@@ -35,14 +35,20 @@ option_list = list(
   make_option("--standardMR", action="store_true", default=TRUE,
               help="Run standard MR analysis or not. [default: %default]"),		  
   make_option("--save.data", action="store_true", default=TRUE,
-              help="Save the IVs data for running MR and CMR or not. [default: %default]")          
+              help="Save the IVs data for running MR and CMR or not. [default: %default]"),   
+  make_option("--verbose", action="store_true", default=TRUE,
+              help="[default: %default]"),
+  make_option("--keep_tmp", action="store_true", default=FALSE,
+              help="Whether to delete temporary files, useful for debug. [default: %default]")   
+     
 )
 
 opt = parse_args(OptionParser(option_list=option_list))
 GCTA = opt$GCTA
 PLINK2 = opt$PLINK2
+verbose = opt$verbose
 
-LDref_SNP = fread(opt$LDref_SNP)
+LDref_SNP = read.table(opt$LDref_SNP,header=FALSE)$V1
 
 
 temp_dir <- opt$tmp
@@ -83,8 +89,8 @@ out_mr_dat_2smr$id.outcome=2
 out_mr_dat_2smr$outcome='outcome'
 harmo_dat = harmonise_data(exp_mr_dat_2smr,out_mr_dat_2smr,2)
 harmo_dat = harmo_dat %>% filter(mr_keep==TRUE)
-exp_mr_dat = harmo_dat %>% select(SNP,effect_allele.exposure,other_allele.exposure,eaf.exposure,beta.exposure,se.exposure,pval.exposure,samplesize.exposure,chr,pos)
-out_mr_dat = harmo_dat %>% select(SNP,effect_allele.outcome,other_allele.outcome,eaf.outcome,beta.outcome,se.outcome,pval.outcome,samplesize.outcome,chr,pos)
+exp_mr_dat = harmo_dat %>% select(SNP,effect_allele.exposure,other_allele.exposure,eaf.exposure,beta.exposure,se.exposure,pval.exposure,samplesize.exposure,chr.x,pos.x)
+out_mr_dat = harmo_dat %>% select(SNP,effect_allele.outcome,other_allele.outcome,eaf.outcome,beta.outcome,se.outcome,pval.outcome,samplesize.outcome,chr.y,pos.y)
 colnames(exp_mr_dat) = colnames(out_mr_dat) = c('SNP', 'A1', 'A2', 'freq', 'b', 'se', 'p', 'N','chr','pos')
 N_x = median(exp_mr_dat$N)
 N_y = median(out_mr_dat$N)
@@ -118,7 +124,7 @@ for(i in 1:nrow(ldBlocks)){
         curLDFILE = sprintf('%s_chr%s', opt$bfile, curChr)
         bfile = sprintf('%s/block%s', temp_dir, i)
         if(!file.exists(paste0(bfile,'.bed'))){
-                plink_command = sprintf("%s --pfile %s --chr %s --from-bp %s --to-bp %s --make-bed --out %s",
+                plink_command = sprintf("%s --bfile %s --chr %s --from-bp %s --to-bp %s --make-bed --out %s",
                                 PLINK2, curLDFILE, curChr, curMin, curMax, bfile)
                 plk_msg=system(plink_command,intern=verbose)
         }
@@ -175,24 +181,22 @@ for(i in 1:nrow(ldBlocks)){
             pval_exp_cond = c(pval_exp_cond, harmo_dat$pval.exposure[match(exp_snp,harmo_dat$SNP)])
             pval_out_cond = c(pval_out_cond, harmo_dat$pval.outcome[match(exp_snp,harmo_dat$SNP)])
         }
-        rm_cmd = sprintf('rm %s.*', bfile)
-        system(rm_cmd)
         }
 }
 
- 
+    dat = list(SNP=all_SNP$SNP,
+        b_exp = b_exp, b_out = b_out, se_exp = se_exp, se_out = se_out, pval_exp = pval_exp, pval_out = pval_out,
+        b_exp_cond = b_exp_cond, b_out_cond = b_out_cond, se_exp_cond = se_exp_cond, se_out_cond = se_out_cond,
+        pval_exp_cond = pval_exp_cond, pval_out_cond = pval_out_cond)
+
     if(opt$save.data){
-        dat = list(SNP=all_SNP$SNP,
-             b_exp = b_exp, b_out = b_out, se_exp = se_exp, se_out = se_out, pval_exp = pval_exp, pval_out = pval_out,
-             b_exp_cond = b_exp_cond, b_out_cond = b_out_cond, se_exp_cond = se_exp_cond, se_out_cond = se_out_cond,
-             pval_exp_cond = pval_exp_cond, pval_out_cond = pval_out_cond)
-   }else{
-        dat = list()
+        saveRDS(dat,sprintf('%s/data.rds',opt$out))
    }
-    rm_cmd = sprintf('rm %s/*cojo*', temp_dir)
-    system(rm_cmd)
-}
-unlink(temp_dir, recursive = TRUE)
+
+    if(!opt$keep_tmp){
+        unlink(temp_dir, recursive = TRUE)
+    }
+
 
 MR = unique( c(unlist(strsplit(opt$MR_methods,','))) )
 M = length(MR)
@@ -232,24 +236,24 @@ res_CMR = NULL
 for(i in 1:M){
     if(MR[i]=='IVW'){
         mr_res = mr_ivw(Joint_mr_obj)
-        res_CMR = rbind(res_MR, c('IVW',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
+        res_CMR = rbind(res_CMR, c('IVW',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
     }
     if(MR[i]=='Median'){
         mr_res = mr_median(Joint_mr_obj)
-        res_CMR = rbind(res_MR, c('Median',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
+        res_CMR = rbind(res_CMR, c('Median',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
     }
     if(MR[i]=='Mode'){
         mr_res = mr_mbe(Joint_mr_obj)
-        res_CMR = rbind(res_MR, c('Mode',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
+        res_CMR = rbind(res_CMR, c('Mode',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
     }
     if(MR[i]=='cML'){
         mr_res = mr_cML(Joint_mr_obj, n = min(N_x,N_y))
-        res_CMR = rbind(res_MR, c('cML',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
+        res_CMR = rbind(res_CMR, c('cML',mr_res@Estimate,mr_res@StdError,mr_res@Pvalue))
     }
 }
-res_CMR = as.data.frame(res_MR)
+res_CMR = as.data.frame(res_CMR)
 colnames(res_CMR) = c('Method','b','se','pval')
-
-dat$MR_res = res_MR
-dat$CMR_res = res_CMR
-saveRDS(dat,sprintf('%sCMR.rds',opt$out))
+datres = list()
+datres$MR_res = res_MR
+datres$CMR_res = res_CMR
+saveRDS(datres,sprintf('%s/CMRresult.rds',opt$out))
